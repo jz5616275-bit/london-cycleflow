@@ -31,26 +31,40 @@ def load_journeys(path: str) -> pd.DataFrame:
     Returned start/end events count *observed successful hires/returns*;
     they do not represent latent unmet demand.
     """
-    frame = pd.read_csv(path, low_memory=False)
+    frame = pd.read_csv(path, dtype="string")
     sc, si = _column(frame, START_TIME), _column(frame, START_ID)
     ec, ei = _column(frame, END_TIME), _column(frame, END_ID)
+    journey = _column(frame, ["Number", "Rental Id", "Journey Id"])
     if not sc or not si:
         raise ValueError(f"Missing start timestamp/station columns: {list(frame.columns)}")
-    out = pd.DataFrame({
-        "started_at": pd.to_datetime(frame[sc], errors="coerce", dayfirst=True),
-        "start_id": frame[si].astype("string").str.strip(),
-    })
-    if ec and ei:
-        out["ended_at"] = pd.to_datetime(frame[ec], errors="coerce", dayfirst=True)
-        out["end_id"] = frame[ei].astype("string").str.strip()
-    else:
-        out["ended_at"] = pd.NaT
-        out["end_id"] = pd.Series(pd.NA, index=out.index, dtype="string")
+
+    def dates(column):
+        values = frame[column].str.strip()
+        iso = values.str.match(r"^\d{4}-", na=False)
+        result = pd.to_datetime(values.where(iso), format="ISO8601", errors="coerce")
+        result.loc[~iso] = pd.to_datetime(
+            values.loc[~iso], format="mixed", errors="coerce", dayfirst=True
+        )
+        return result
+
+    out = pd.DataFrame({"started_at": dates(sc), "start_id": station_keys(frame[si])})
+    out["ended_at"] = dates(ec) if ec else pd.NaT
+    out["end_id"] = station_keys(frame[ei]) if ei else pd.NA
+    out["journey_id"] = frame[journey].str.strip().replace("", pd.NA) if journey else pd.NA
+    out.loc[out.ended_at < out.started_at, ["ended_at", "end_id"]] = pd.NA
     return out.dropna(subset=["started_at", "start_id"]).reset_index(drop=True)
 
 
+def station_keys(values: pd.Series) -> pd.Series:
+    """Normalise numeric terminal codes without changing alphanumeric identifiers."""
+    return (values.astype("string").str.strip()
+            .str.replace(r"^([0-9]+)\.0+$", r"\1", regex=True)
+            .str.replace(r"^0+(?=[0-9]+$)", "", regex=True)
+            .replace("", pd.NA))
+
+
 def station_counts(journeys: pd.DataFrame, station_id: str,
-                   interval: str = "5min") -> pd.DataFrame:
+                   interval: str = "5min", *, start=None, end=None) -> pd.DataFrame:
     """Time-bucket observed hires and returns for one station."""
     if interval not in ("5min", "10min", "15min", "30min", "1h"):
         raise ValueError("Unsupported interval")
@@ -61,8 +75,11 @@ def station_counts(journeys: pd.DataFrame, station_id: str,
     hires = starts.dt.floor(interval).value_counts().sort_index()
     returns = ends.dt.floor(interval).value_counts().sort_index()
     # Add zero-observation buckets so models use equal time steps.
-    index = pd.date_range(starts.min().floor(interval), starts.max().ceil(interval),
-                          freq=interval)
+    if start is None and end is None:
+        index = pd.date_range(starts.min().floor(interval), starts.max().ceil(interval),
+                              freq=interval)
+    else:
+        index = pd.date_range(start, end, freq=interval, inclusive="left")
     frame = pd.DataFrame(index=index)
     frame["hires"] = hires.reindex(index, fill_value=0).astype(int)
     frame["returns"] = returns.reindex(index, fill_value=0).astype(int)
@@ -74,17 +91,23 @@ def fetch_bikepoints(timeout: float = 15.0) -> list[dict]:
     """Fetch live TfL dock metadata; never represented as historical inventory."""
     response = requests.get("https://api.tfl.gov.uk/BikePoint", timeout=timeout)
     response.raise_for_status()
+    return bikepoint_metadata(response.json())
+
+
+def bikepoint_metadata(points: list[dict]) -> list[dict]:
     stations = []
-    for p in response.json():
+    for p in points:
         props = {str(v.get("key")): v.get("value")
                  for v in p.get("additionalProperties", [])}
         ident = str(p.get("id", "")).split("_")[-1]
+
         def num(key: str):
             try:
                 return int(props.get(key))
             except (ValueError, TypeError):
                 return None
-        stations.append({"id": ident, "name": p.get("commonName", ident),
+        stations.append({"id": ident, "terminal": props.get("TerminalName"),
+                         "name": p.get("commonName", ident),
                          "lat": p.get("lat"), "lon": p.get("lon"),
                          "capacity": num("NbDocks"), "bikes": num("NbBikes"),
                          "empty_docks": num("NbEmptyDocks")})

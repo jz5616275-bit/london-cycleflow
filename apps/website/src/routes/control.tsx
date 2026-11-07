@@ -1,51 +1,179 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useEffect, useRef } from 'react';
 
-export const Route = createFileRoute('/control')({ component: ControlPage });
+import {
+    HISTORICAL_STATIONS,
+    buildHistorical,
+    HISTORICAL_LABEL
+} from '../lib/cycleflow-historical';
+import { WINDOWS } from '../lib/realtime/cycleflow-state';
+import { useCycleflow } from '../lib/realtime/use-cycleflow';
 
-// Lightweight same-origin sync between DO's embedded operator/screen iframes.
-// A production deployment can move these messages to the starter WebSocket bus.
+export const Route = createFileRoute('/control')({
+    validateSearch: (search: Record<string, unknown>) => ({
+        operator: search.operator === 'B' ? 'B' : 'A'
+    }),
+    component: ControlPage
+});
+
 function ControlPage() {
-    const [minutes, setMinutes] = useState(30);
-    const [shock, setShock] = useState(0);
-    const [mode, setMode] = useState<'baseline' | 'constrained'>('constrained');
-    const publish = (next: { minutes: number; shock: number; mode: string }) => {
-        if (typeof window !== 'undefined') {
-            localStorage.setItem('cycleflow-controls', JSON.stringify(next));
-            const channel = new BroadcastChannel('cycleflow-controls');
-            channel.postMessage(next);
-            channel.close();
-        }
-    };
-    const update = (next: Partial<{ minutes: number; shock: number; mode: 'baseline' | 'constrained' }>) => {
-        const state = { minutes, shock, mode, ...next };
-        setMinutes(state.minutes);
-        setShock(state.shock);
-        setMode(state.mode);
-        publish(state);
-    };
-    const style = { background: '#111c2d', color: '#f8fafc', minHeight: '100vh', padding: '20px', fontFamily: 'system-ui' };
-    return <main style={style}>
-        <h2 style={{ fontSize: 27, fontWeight: 750 }}>CycleFlow Controls</h2>
-        <p style={{ color: '#a1aec1' }}>TfL cycle hire · Data Observatory demo</p>
-        <p style={{ marginTop: 18, fontWeight: 650 }}>Forecast window</p>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {[10, 20, 30, 45, 60].map(n => <button key={n} onClick={() => update({ minutes: n })}
-                style={{ padding: '9px 15px', borderRadius: 8, cursor: 'pointer', color: '#fff',
-                    background: n === minutes ? '#2563eb' : '#334155' }}>{n} min</button>)}
-        </div>
-        <p style={{ marginTop: 15, fontWeight: 650 }}>Demand scenario: {shock > 0 ? '+' : ''}{shock}%</p>
-        <input aria-label="Demand shock" type="range" min="-50" max="100" step="10" value={shock}
-            onChange={e => update({ shock: Number(e.target.value) })} style={{ width: '95%' }}/>
-        <p style={{ marginTop: 15, fontWeight: 650 }}>Prediction display</p>
-        <div style={{ display: 'flex', gap: 8 }}>
-            {(['baseline', 'constrained'] as const).map(v => <button key={v} onClick={() => update({ mode: v })}
-                style={{ padding: '9px 15px', borderRadius: 8, cursor: 'pointer', color: '#fff',
-                    background: mode === v ? '#2563eb' : '#334155' }}>{v}</button>)}
-        </div>
-        <p style={{ color: '#94a3b8', marginTop: 18, fontSize: 12 }}>
-            Windows represent UI scenario controls. Backtest data are historical one-step results;
-            multi-horizon model output is not implied by this selection.
-        </p>
-    </main>;
+    const { operator } = Route.useSearch();
+    const { controls, connection, update } = useCycleflow();
+    const data = buildHistorical(controls);
+    const root = useRef<HTMLElement>(null);
+    useEffect(() => {
+        const node = root.current;
+        if (!node || window.parent === window) return;
+        const reportSize = () =>
+            window.parent.postMessage(
+                {
+                    type: 'cycleflow/operator-size',
+                    height: Math.ceil(node.getBoundingClientRect().height)
+                },
+                window.location.origin
+            );
+        const observer = new ResizeObserver(reportSize);
+        observer.observe(node);
+        reportSize();
+        return () => observer.disconnect();
+    }, []);
+    return (
+        <main className="cf-control" data-operator={operator} ref={root}>
+            <header>
+                <div>
+                    <span className="cf-eyebrow">OPERATOR {operator} / SHARED WALL CONTROLS</span>
+                    <h1>{operator === 'A' ? 'Forecast studio' : 'Scenario laboratory'}</h1>
+                </div>
+                <span className={`cf-sync ${connection}`} role="status">
+                    {connection}
+                </span>
+            </header>
+            <fieldset disabled={connection !== 'synced'} className="cf-control-fields">
+                <legend className="cf-sr-only">Shared forecast and scenario controls</legend>
+                <div className="cf-control-block">
+                    <label>FORECAST WINDOW</label>
+                    <div className="cf-window-buttons">
+                        {WINDOWS.map((n) => (
+                            <button
+                                key={n}
+                                aria-pressed={n === controls.minutes}
+                                onClick={() => update({ minutes: n })}
+                            >
+                                {n}
+                                <small>min</small>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <div className="cf-control-block">
+                    <label htmlFor="station-scope">STATION SCOPE</label>
+                    <select
+                        id="station-scope"
+                        value={
+                            HISTORICAL_STATIONS.some((s) => s.id === controls.stationId)
+                                ? (controls.stationId ?? '')
+                                : ''
+                        }
+                        onChange={(e) => update({ stationId: e.target.value || null })}
+                    >
+                        <option value="">All evaluated stations</option>
+                        {HISTORICAL_STATIONS.map((s) => (
+                            <option key={s.id} value={s.id}>
+                                {s.name}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+                <div className="cf-control-block">
+                    <label>FORECAST MODEL</label>
+                    <div className="cf-segmented">
+                        <button
+                            aria-pressed={controls.mode === 'baseline'}
+                            onClick={() => update({ mode: 'baseline' })}
+                        >
+                            Baseline
+                        </button>
+                        <button
+                            aria-pressed={controls.mode === 'constrained'}
+                            onClick={() => update({ mode: 'constrained' })}
+                        >
+                            Nonnegative correction
+                        </button>
+                    </div>
+                </div>
+                <div className="cf-control-block cf-shock-control">
+                    <label htmlFor="demand-shock">
+                        DEMAND SHOCK{' '}
+                        <strong>
+                            {controls.shock > 0 ? '+' : ''}
+                            {controls.shock}%
+                        </strong>
+                    </label>
+                    <input
+                        id="demand-shock"
+                        aria-label="Demand shock"
+                        type="range"
+                        min="-50"
+                        max="100"
+                        step="10"
+                        value={controls.shock}
+                        onChange={(e) => update({ shock: Number(e.target.value) })}
+                    />
+                    <div className="cf-shock-presets">
+                        {[-50, 0, 30, 100].map((shock) => (
+                            <button
+                                key={shock}
+                                aria-pressed={controls.shock === shock}
+                                onClick={() => update({ shock })}
+                            >
+                                {shock > 0 ? '+' : ''}
+                                {shock}%
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <div className="cf-control-block">
+                    <label>WALL PRESENTATION</label>
+                    <div className="cf-segmented">
+                        <button
+                            aria-pressed={controls.wallLayout !== 'panorama'}
+                            onClick={() => update({ wallLayout: 'analytics' })}
+                        >
+                            Six insights
+                        </button>
+                        <button
+                            aria-pressed={controls.wallLayout === 'panorama'}
+                            onClick={() => update({ wallLayout: 'panorama' })}
+                        >
+                            Stitched map
+                        </button>
+                    </div>
+                </div>
+                <div className="cf-control-block cf-reset-block">
+                    <div>
+                        <span>Scenario hires</span>
+                        <strong>{data.total.toFixed(1)}</strong>
+                    </div>
+                    <button
+                        className="cf-reset"
+                        onClick={() =>
+                            update({
+                                minutes: 30,
+                                shock: 0,
+                                mode: 'constrained',
+                                stationId: null,
+                                wallLayout: 'analytics'
+                            })
+                        }
+                    >
+                        ↺ Reset
+                    </button>
+                </div>
+            </fieldset>
+            <footer>
+                <span className="cf-demo-badge">{HISTORICAL_LABEL}</span>
+                <span>Both operators control the same wall · hypothetical scenarios</span>
+            </footer>
+        </main>
+    );
 }

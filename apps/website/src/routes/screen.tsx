@@ -1,92 +1,354 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
-import { Map, Marker } from '@vis.gl/react-maplibre';
-import 'maplibre-gl/dist/maplibre-gl.css';
+import { useMemo } from 'react';
 
-type Station = { id: string; name: string; lat: number; lon: number;
-    capacity: number | null; bikes: number | null; empty_docks: number | null };
-type ForecastRow = { timestamp: string; actual: number; baseline: number; constrained: number };
-type Forecast = { metrics: Record<string, { mae: number; rmse: number }>;
-    rows: ForecastRow[] };
-type Result = { kind: string; station_id: string | null;
-    note: string; horizons: Record<string, Forecast> };
-type Controls = { minutes: number; shock: number; mode: 'baseline' | 'constrained' };
-const initial: Controls = { minutes: 30, shock: 0, mode: 'constrained' };
+import { LineChart, MetricBars, SERIES } from '../components/cycleflow-charts';
+import { LondonMap } from '../components/cycleflow-map';
+import { wallTile } from '../lib/cycleflow-demo';
+import { buildHistorical, HISTORICAL_LABEL } from '../lib/cycleflow-historical';
+import { WINDOWS } from '../lib/realtime/cycleflow-state';
+import { useCycleflow } from '../lib/realtime/use-cycleflow';
 
-export const Route = createFileRoute('/screen')({ component: ScreenPage });
+export const Route = createFileRoute('/screen')({
+    validateSearch: (search: Record<string, unknown>) => wallTile(search.c, search.r),
+    component: ScreenPage
+});
+const titles = [
+    'London demand atlas',
+    'The rhythm of the city',
+    'Baseline and correction',
+    'What if demand changes?',
+    'Where demand concentrates',
+    'Measure the difference'
+];
+const subtitles = [
+    'SANTANDER CYCLES / SPATIAL DEMAND',
+    'HISTORICAL DEMAND / FEBRUARY 2026',
+    'BASELINE VS NONNEGATIVE CORRECTION',
+    'HYPOTHETICAL DEMAND / SENSITIVITY',
+    'STATION INTELLIGENCE / TOP SIX',
+    'MODEL EVALUATION / TIME-ORDERED HOLDOUT'
+];
+const number = (value: number) => value.toLocaleString('en-GB', { maximumFractionDigits: 1 });
 
 function ScreenPage() {
-    const [stations, setStations] = useState<Station[]>([]);
-    const [result, setResult] = useState<Result | null>(null);
-    const [controls, setControls] = useState<Controls>(initial);
-    const [selected, setSelected] = useState<Station | null>(null);
-    const [error, setError] = useState('');
-    useEffect(() => {
-        const saved = localStorage.getItem('cycleflow-controls');
-        if (saved) { try { setControls({ ...initial, ...JSON.parse(saved) }); } catch { /* default */ } }
-        const channel = new BroadcastChannel('cycleflow-controls');
-        channel.onmessage = event => setControls({ ...initial, ...event.data });
-        Promise.all([
-            fetch('/data/stations.json').then(r => r.json()),
-            fetch('/data/results.json').then(r => r.json()),
-        ]).then(([sites, results]) => {
-            setStations(Array.isArray(sites) ? sites.filter((s: Station) =>
-                Number.isFinite(s.lon) && Number.isFinite(s.lat)) : []);
-            setResult(results);
-        }).catch(e => setError(String(e)));
-        return () => channel.close();
-    }, []);
-    const forecast = result?.horizons?.[String(controls.minutes)];
-    const rows = forecast?.rows ?? [];
-    const latest = rows.length ? rows[rows.length - 1] : null;
-    const value = latest ? latest[controls.mode] * (1 + controls.shock / 100) : null;
-    const score = forecast?.metrics?.[controls.mode];
-    return <main style={{ height: '100vh', width: '100vw', background: '#091526', color: 'white', position: 'relative' }}>
-        <Map initialViewState={{ longitude: -0.128, latitude: 51.5074, zoom: 11.7 }}
-            mapStyle="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
-            style={{ height: '100%', width: '100%' }}>
-            {stations.map(s => <Marker key={s.id} longitude={s.lon} latitude={s.lat}>
-                <button title={s.name} onClick={() => setSelected(s)}
-                    style={{ cursor: 'pointer', width: 16, height: 16, borderRadius: '50%',
-                        background: s.bikes === 0 ? '#f43f5e' : '#38bdf8', border: '2px solid #fff' }} />
-            </Marker>)}
-        </Map>
-        <section style={{ position: 'absolute', top: 28, left: 28, padding: 22, width: 430,
-            background: 'rgba(12,26,47,.94)', borderRadius: 14, fontFamily: 'system-ui' }}>
-            <h1 style={{ fontSize: 32, fontWeight: 750 }}>London CycleFlow</h1>
-            <p style={{ color: '#a8bad4' }}>TfL Cycle Hire · Physical Constraints</p>
-            <p style={{ marginTop: 20 }}>Scenario: {controls.minutes} min · {controls.shock > 0 ? '+' : ''}{controls.shock}%</p>
-            <p>Model: <strong>{controls.mode}</strong></p>
-            {selected && <p style={{ marginTop: 10 }}>Selected: {selected.name}<br/>
-                Available bikes: {selected.bikes ?? 'unknown'} · Empty docks: {selected.empty_docks ?? 'unknown'}
-                <br/><small style={{ color: '#a8bad4' }}>Live snapshot, not historical inventory</small></p>}
-            {result?.kind === 'historical_direct_multi_horizon_backtest' ? <div style={{ marginTop: 15 }}>
-                <p>Historical station ID: {result.station_id}</p>
-                <p>Latest {controls.minutes}-minute scenario estimate: {value?.toFixed(2)} successful hires</p>
-                <p>Historical MAE: {score?.mae.toFixed(2)} · RMSE: {score?.rmse.toFixed(2)}</p>
-                <small style={{ color: '#fbbf24' }}>Chronological historical backtest. Scenario shock is hypothetical;
-                    backtest scores are for unshocked forecasts only.</small>
-                <div style={{ marginTop: 12, maxHeight: 155, overflow: 'hidden' }}>
-                    <svg viewBox="0 0 410 135" width="100%" role="img" aria-label="Recent actual versus forecast history">
-                        {(['actual', controls.mode] as const).map((series, idx) => {
-                            const tail = rows.slice(-35);
-                            const bound = Math.max(1, ...tail.flatMap(r => [r.actual, r.baseline, r.constrained]));
-                            const points = tail.map((r, i) => `${i * 12},${130 - Math.max(0, r[series]) / bound * 115}`).join(' ');
-                            return <polyline key={series + idx} points={points} fill="none"
-                                stroke={idx === 0 ? '#f8fafc' : '#38bdf8'} strokeWidth="2.5" />;
-                        })}
-                    </svg>
-                    <p style={{ fontSize: 11, color: '#cbd5e1' }}>White: observed · Blue: forecast · Last 35 test windows</p>
-                </div>
-            </div> : <p style={{ color: '#fbbf24', marginTop: 15 }}>
-                No real prediction data loaded. Run the Python CLI with an official TfL journey CSV.
-            </p>}
-            {!stations.length && <p style={{ color: '#94a3b8', marginTop: 10 }}>
-                No station snapshot loaded. Run CLI --fetch-stations.</p>}
-            {error && <p style={{ color: '#fb7185' }}>{error}</p>}
-            <p style={{ color: '#9aacc5', marginTop: 14, fontSize: 12 }}>
-                Demo stages are not live operational forecasts. No synthetic results are presented as measured data.
-            </p>
-        </section>
-    </main>;
+    const { c, r } = Route.useSearch();
+    const { controls, connection, update } = useCycleflow();
+    const data = useMemo(() => buildHistorical(controls), [controls]);
+    const panel = r * 3 + c;
+    const panorama = controls.wallLayout === 'panorama';
+    const scenarios = [-50, -20, 0, 30, 60, 100].map((shock) => ({
+        shock,
+        value: buildHistorical({ ...controls, shock }).total
+    }));
+    const maxScenario = Math.max(...scenarios.map((s) => s.value), data.total, 1);
+    const ranked = [...data.stations].sort((a, b) => b.demand - a.demand).slice(0, 6);
+    return (
+        <main
+            className={`cf-screen ${panorama ? 'cf-panorama-screen' : ''}`}
+            data-panel={panel}
+            data-horizon={controls.minutes}
+            data-shock={controls.shock}
+            data-layout={panorama ? 'panorama' : 'analytics'}
+        >
+            {panorama ? (
+                <>
+                    <LondonMap
+                        stations={data.stations}
+                        selected={controls.stationId}
+                        onSelect={(stationId) => update({ stationId })}
+                        panorama={{ c, r }}
+                    />
+                    <div className="cf-panorama-caption">
+                        <span className="cf-demo-badge">{HISTORICAL_LABEL}</span>
+                        <h1>
+                            {c === 0 && r === 0
+                                ? 'London CycleFlow'
+                                : `Demand atlas / ${c + 1}.${r + 1}`}
+                        </h1>
+                        <p>
+                            {controls.minutes} min · {controls.shock > 0 ? '+' : ''}
+                            {controls.shock}% shock · {connection}
+                        </p>
+                    </div>
+                    <footer className="cf-panorama-footer">
+                        Continuous 3 × 2 canvas · c{c} r{r} · schematic London · historical model
+                        estimates
+                    </footer>
+                </>
+            ) : (
+                <>
+                    <header className="cf-panel-header">
+                        <span className="cf-eyebrow">
+                            <b>{String(panel + 1).padStart(2, '0')}</b> {subtitles[panel]}
+                        </span>
+                        <span className={`cf-sync ${connection}`} role="status">
+                            {connection}
+                        </span>
+                    </header>
+                    <div className="cf-title-row">
+                        <h1>{titles[panel]}</h1>
+                        <span className="cf-horizon">
+                            {controls.minutes}
+                            <small>MIN</small>
+                        </span>
+                    </div>
+                    <div className="cf-panel-context">
+                        <span>{data.scope}</span>
+                        <span className="cf-demo-badge">{HISTORICAL_LABEL}</span>
+                    </div>
+                    <section className="cf-panel-body">
+                        {panel === 0 && (
+                            <>
+                                <div className="cf-map-summary">
+                                    <strong>
+                                        {number(
+                                            data.stations.reduce((sum, s) => sum + s.demand, 0)
+                                        )}
+                                    </strong>
+                                    <span>
+                                        estimated hires across evaluated stations
+                                        <br />
+                                        {data.latest.timestamp.slice(0, 16).replace('T', ' ')} · +
+                                        {controls.minutes} min
+                                    </span>
+                                    <div className="cf-map-key">
+                                        <span>
+                                            <i style={{ background: '#61dbbe' }} /> &lt;12
+                                        </span>
+                                        <span>
+                                            <i style={{ background: '#f3c967' }} />
+                                            12–25
+                                        </span>
+                                        <span>
+                                            <i style={{ background: '#fb8a69' }} /> ≥25
+                                        </span>
+                                    </div>
+                                </div>
+                                <LondonMap
+                                    stations={data.stations}
+                                    selected={controls.stationId}
+                                    onSelect={(stationId) => update({ stationId })}
+                                />
+                                <p className="cf-footnote">
+                                    Color + circle size indicate model estimates · hypothetical
+                                    shock {controls.shock > 0 ? '+' : ''}
+                                    {controls.shock}% ·{' '}
+                                    {controls.mode === 'constrained'
+                                        ? 'Nonnegative correction'
+                                        : 'Baseline'}
+                                </p>
+                            </>
+                        )}
+                        {panel === 1 && (
+                            <>
+                                <div className="cf-stats">
+                                    <div>
+                                        <span>Last observed window</span>
+                                        <strong>{number(data.latest.actual)}</strong>
+                                    </div>
+                                    <div>
+                                        <span>Selected model forecast</span>
+                                        <strong className="cf-mint">
+                                            {number(data.reference)}
+                                        </strong>
+                                    </div>
+                                    <div>
+                                        <span>Forecast origin</span>
+                                        <strong>{data.latest.time}</strong>
+                                    </div>
+                                </div>
+                                <LineChart
+                                    rows={data.rows}
+                                    series={[
+                                        SERIES[0],
+                                        SERIES[controls.mode === 'constrained' ? 2 : 1],
+                                        SERIES[3]
+                                    ]}
+                                    label="Observed TfL hires, selected forecast and demand scenario by forecast origin"
+                                />
+                                <p className="cf-footnote">
+                                    5-minute forecast origins · window length {controls.minutes} min
+                                    · last 96 holdout origins · February 2026
+                                </p>
+                            </>
+                        )}
+                        {panel === 2 && (
+                            <>
+                                <div className="cf-model-values">
+                                    <div>
+                                        <span>BASELINE</span>
+                                        <strong>{number(data.latest.baseline)}</strong>
+                                        <small>Direct Ridge regression</small>
+                                    </div>
+                                    <div>
+                                        <span>NONNEGATIVE CORRECTION</span>
+                                        <strong>{number(data.latest.constrained)}</strong>
+                                        <small>Nonnegative correction</small>
+                                    </div>
+                                </div>
+                                <LineChart
+                                    rows={data.rows}
+                                    series={SERIES.slice(0, 3)}
+                                    label="Baseline and Nonnegative correction forecasts against TfL observations"
+                                />
+                                <p className="cf-footnote">
+                                    Unshocked comparison · constraints are post-processing, not a
+                                    trained PINN
+                                </p>
+                            </>
+                        )}
+                        {panel === 3 && (
+                            <>
+                                <div className="cf-scenario-hero">
+                                    <div>
+                                        <span>Active demand shock</span>
+                                        <strong>
+                                            {controls.shock > 0 ? '+' : ''}
+                                            {controls.shock}%
+                                        </strong>
+                                    </div>
+                                    <div>
+                                        <span>Hypothetical hires</span>
+                                        <strong className="cf-gold">{number(data.total)}</strong>
+                                        <small>
+                                            {data.delta >= 0 ? '+' : ''}
+                                            {number(data.delta)} vs unshocked
+                                        </small>
+                                    </div>
+                                </div>
+                                <div className="cf-sensitivity">
+                                    {scenarios.map((s) => (
+                                        <div
+                                            key={s.shock}
+                                            className={
+                                                s.shock === controls.shock ? 'is-active' : ''
+                                            }
+                                        >
+                                            <span>
+                                                {s.shock > 0 ? '+' : ''}
+                                                {s.shock}%
+                                            </span>
+                                            <div className="cf-track">
+                                                <i
+                                                    style={{
+                                                        width: `${Math.max(1, (s.value / maxScenario) * 100)}%`,
+                                                        background:
+                                                            s.shock === 0 ? '#61dbbe' : '#f3c967'
+                                                    }}
+                                                />
+                                            </div>
+                                            <strong>{number(s.value)}</strong>
+                                        </div>
+                                    ))}
+                                </div>
+                                <p className="cf-footnote">
+                                    Hypothetical scaling of the historical prediction. Historical
+                                    scores use unshocked predictions and recorded hires.
+                                </p>
+                            </>
+                        )}
+                        {panel === 4 && (
+                            <>
+                                <div className="cf-ranking-head">
+                                    <span>STATION / ESTIMATED HIRES</span>
+                                    <span>OBSERVED HIRES</span>
+                                </div>
+                                <div className="cf-ranking">
+                                    {ranked.map((s, i) => (
+                                        <button
+                                            key={s.id}
+                                            onClick={() => update({ stationId: s.id })}
+                                            aria-pressed={controls.stationId === s.id}
+                                        >
+                                            <b>{String(i + 1).padStart(2, '0')}</b>
+                                            <div>
+                                                <span>{s.name}</span>
+                                                <div className="cf-track">
+                                                    <i
+                                                        style={{
+                                                            width: `${Math.max(1, (s.demand / Math.max(1, ranked[0].demand)) * 100)}%`,
+                                                            background: '#61dbbe'
+                                                        }}
+                                                    />
+                                                </div>
+                                            </div>
+                                            <strong>{number(s.demand)}</strong>
+                                            <small>{s.actual}</small>
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="cf-footnote">
+                                    Ranking covers the 30 evaluated stations. Observed hires are
+                                    recorded TfL trips for the same forecast window.
+                                </p>
+                            </>
+                        )}
+                        {panel === 5 && (
+                            <>
+                                <MetricBars
+                                    baseline={data.baselineScore}
+                                    constrained={data.constrainedScore}
+                                />
+                                <table className="cf-horizon-table">
+                                    <caption>
+                                        Error across five forecast windows · {data.scope}
+                                    </caption>
+                                    <thead>
+                                        <tr>
+                                            <th>Window</th>
+                                            <th>Baseline MAE</th>
+                                            <th>Baseline RMSE</th>
+                                            <th>Constrained MAE</th>
+                                            <th>Constrained RMSE</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {WINDOWS.map((minutes) => {
+                                            const scores = buildHistorical({
+                                                ...controls,
+                                                minutes
+                                            });
+                                            return (
+                                                <tr
+                                                    className={
+                                                        minutes === controls.minutes
+                                                            ? 'is-active'
+                                                            : ''
+                                                    }
+                                                    key={minutes}
+                                                >
+                                                    <th>{minutes} min</th>
+                                                    <td>{scores.baselineScore.mae.toFixed(2)}</td>
+                                                    <td>{scores.baselineScore.rmse.toFixed(2)}</td>
+                                                    <td>
+                                                        {scores.constrainedScore.mae.toFixed(2)}
+                                                    </td>
+                                                    <td>
+                                                        {scores.constrainedScore.rmse.toFixed(2)}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                                <p className="cf-footnote">
+                                    {data.testCount.toLocaleString('en-GB')} holdout origins ·
+                                    scores use the full chronological holdout. Aggregate errors
+                                    compare summed hires across the evaluated stations.
+                                </p>
+                            </>
+                        )}
+                    </section>
+                    <footer className="cf-panel-footer">
+                        <span>
+                            London CycleFlow <b>↗</b>
+                        </span>
+                        <span>
+                            c{c} / r{r} · IMPERIAL DATA OBSERVATORY
+                        </span>
+                    </footer>
+                </>
+            )}
+        </main>
+    );
 }

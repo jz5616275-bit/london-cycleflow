@@ -41,12 +41,12 @@ def test_metrics():
 def test_station_counts():
     journeys = pd.DataFrame({"start_id": ["10", "10", "11"],
                              "started_at": pd.to_datetime(["2026-01-01 07:01",
-                                                            "2026-01-01 07:06",
-                                                            "2026-01-01 07:10"]),
+                                                           "2026-01-01 07:06",
+                                                           "2026-01-01 07:10"]),
                              "end_id": ["11", "10", "10"],
                              "ended_at": pd.to_datetime(["2026-01-01 07:20",
-                                                          "2026-01-01 07:08",
-                                                          "2026-01-01 07:12"])})
+                                                         "2026-01-01 07:08",
+                                                         "2026-01-01 07:12"])})
     result = station_counts(journeys, "10")
     assert result.hires.sum() == 2
     assert result.returns.sum() == 2

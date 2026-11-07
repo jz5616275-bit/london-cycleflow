@@ -63,7 +63,7 @@ def backtest_horizons(frame: pd.DataFrame,
     Every horizon has an independent chronological train/test evaluation.
     These are forecasts of *successful historical hires*, not unmet demand.
     """
-    if bucket_minutes <= 0 or any(h % bucket_minutes for h in horizons):
+    if bucket_minutes <= 0 or any(h <= 0 or h % bucket_minutes for h in horizons):
         raise ValueError("Each horizon must be divisible by bucket_minutes")
     if not 0 < test_fraction < 0.5:
         raise ValueError("Invalid test fraction")
@@ -74,6 +74,7 @@ def backtest_horizons(frame: pd.DataFrame,
     if not timestamps.diff().iloc[1:].eq(pd.Timedelta(minutes=bucket_minutes)).all():
         raise ValueError("Expected contiguous equally spaced time buckets")
     counts = data.hires.to_numpy(dtype=float)
+    cutoff = int(len(data) * (1 - test_fraction))
     results: dict[int, pd.DataFrame] = {}
     for horizon in horizons:
         steps = horizon // bucket_minutes
@@ -83,16 +84,25 @@ def backtest_horizons(frame: pd.DataFrame,
         if stop - start < 50:
             raise ValueError(f"Insufficient observations for {horizon}-minute forecast")
         indices = np.arange(start, stop)
-        lag = counts[indices - 1]
-        x = design_matrix(timestamps.iloc[indices], lag)
-        y = np.array([counts[i:i + steps].sum() for i in indices])
-        split = int(len(indices) * (1 - test_fraction))
-        baseline = ridge_fit_predict(x[:split], y[:split], x[split:])
+        # Only completed buckets enter features; no train label crosses the cutoff.
+        features = design_matrix(timestamps.iloc[indices], counts[indices - 1])
+        cumulative = np.r_[0, counts.cumsum()]
+        labels = cumulative[indices + steps] - cumulative[indices]
+        train = indices + steps <= cutoff
+        test = indices >= cutoff
+        if not train.any() or not test.any():
+            raise ValueError("Insufficient observations on either side of cutoff")
+        baseline = ridge_fit_predict(features[train], labels[train], features[test])
         result = pd.DataFrame({
-            "timestamp": timestamps.iloc[indices[split:]].to_numpy(),
-            "actual": y[split:],
+            "timestamp": timestamps.iloc[indices[test]].to_numpy(),
+            "actual": labels[test],
             "baseline": baseline,
             "constrained": np.maximum(0.0, baseline),
         })
+        result.attrs.update(
+            train_count=int(train.sum()),
+            train_target_end=timestamps.iloc[indices[train][-1] + steps].isoformat(),
+            test_start=timestamps.iloc[cutoff].isoformat(),
+        )
         results[horizon] = result
     return results

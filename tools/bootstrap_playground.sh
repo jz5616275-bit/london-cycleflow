@@ -8,8 +8,8 @@ if [ -e "$DEST/.git" ]; then
   exit 1
 fi
 git clone https://github.com/dsi-icl/do-starter-playground.git "$DEST"
-cp "$ROOT/apps/website/src/routes/control.tsx" "$DEST/apps/website/src/routes/control.tsx"
-cp "$ROOT/apps/website/src/routes/screen.tsx" "$DEST/apps/website/src/routes/screen.tsx"
+git -C "$DEST" checkout --detach f8b4690c78dc709167443d36e7d661fa4e21f2bc
+cp -R "$ROOT/apps/website/src/." "$DEST/apps/website/src/"
 mkdir -p "$DEST/apps/website/public/data"
 cp "$ROOT/apps/website/public/data/"*.json "$DEST/apps/website/public/data/"
 cp -R "$ROOT/cycleflow" "$DEST/cycleflow"
