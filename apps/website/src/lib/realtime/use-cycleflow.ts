@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 
+import type { ScenarioSnapshot } from '../cycleflow-scenario';
 import { controlPatch, initialControls } from './cycleflow-state';
 import type { Controls } from './cycleflow-state';
 
 export function useCycleflow() {
     const [controls, setControls] = useState<Controls>(initialControls);
+    const [scenarioSnapshot, setScenarioSnapshot] = useState<ScenarioSnapshot | null>(null);
     const [connection, setConnection] = useState('connecting');
     const socketRef = useRef<WebSocket | null>(null);
     const ready = useRef(false);
@@ -32,8 +34,11 @@ export function useCycleflow() {
                             ...initialControls,
                             ...controlPatch(message.state.controls)
                         });
+                        setScenarioSnapshot(message.state.scenarioSnapshot ?? null);
                         ready.current = true;
                         setConnection('synced');
+                    } else if (message?.type === 'cycleflow/scenario') {
+                        setScenarioSnapshot(message.snapshot ?? null);
                     } else if (message?.type === 'cycleflow/state') {
                         setControls((previous) => ({
                             ...previous,
@@ -67,5 +72,10 @@ export function useCycleflow() {
         // Apply only server-acknowledged state, including the sender, in bus order.
         socket.send(JSON.stringify({ type: 'cycleflow/update', controls: controlPatch(patch) }));
     };
-    return { controls, connection, update };
+    const captureScenario = () => {
+        const socket = socketRef.current;
+        if (ready.current && socket?.readyState === WebSocket.OPEN)
+            socket.send(JSON.stringify({ type: 'cycleflow/capture-scenario' }));
+    };
+    return { controls, connection, update, scenarioSnapshot, captureScenario };
 }

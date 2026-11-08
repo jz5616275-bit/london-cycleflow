@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { LineChart, MetricBars, SERIES } from '../components/cycleflow-charts';
 import { LiveWall } from '../components/cycleflow-live-wall';
 import { LondonMap } from '../components/cycleflow-map';
+import { ScenarioWall } from '../components/cycleflow-scenario-wall';
 import { wallTile } from '../lib/cycleflow-demo';
 import { buildHistorical, HISTORICAL_LABEL } from '../lib/cycleflow-historical';
 import { WINDOWS } from '../lib/realtime/cycleflow-state';
@@ -33,7 +34,9 @@ const number = (value: number) => value.toLocaleString('en-GB', { maximumFractio
 
 function ScreenPage() {
     const { c, r } = Route.useSearch();
-    const { controls, connection, update } = useCycleflow();
+    const { controls, connection, update, scenarioSnapshot } = useCycleflow();
+    if (controls.view === 'scenario')
+        return <ScenarioWall controls={controls} c={c} r={r} snapshot={scenarioSnapshot} />;
     if (controls.view === 'live') {
         return (
             <LiveWall
@@ -55,7 +58,7 @@ function HistoricalWall({
     r,
     connection,
     update
-}: ReturnType<typeof useCycleflow> & {
+}: Pick<ReturnType<typeof useCycleflow>, 'controls' | 'connection' | 'update'> & {
     c: number;
     r: number;
 }) {

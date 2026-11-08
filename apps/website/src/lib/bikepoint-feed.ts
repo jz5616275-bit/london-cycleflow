@@ -35,3 +35,5 @@ export function createBikePointFeed(fetcher = fetch, now = Date.now) {
         return { ...cached, failed, origin: new Date(now()).toISOString() };
     };
 }
+
+export const readBikePointFeed = createBikePointFeed();

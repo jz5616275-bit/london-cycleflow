@@ -1,6 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { defineHooks } from 'crossws';
 
+import { readBikePointFeed } from '../lib/bikepoint-feed';
+import { inventoryStatus, ONLINE_MODEL } from '../lib/cycleflow-live';
+import type { ScenarioSnapshot } from '../lib/cycleflow-scenario';
 import type {
     BusMessage,
     BusSharedState,
@@ -14,12 +17,18 @@ import { isMapCity } from '../lib/realtime/map-cities';
 // In-memory bus state for this server process.
 // New clients receive this snapshot in the `hello` handshake so they can
 // join late without waiting for another control interaction.
-const busSharedState: BusSharedState & { controls: Controls } = {
+const busSharedState: BusSharedState & {
+    controls: Controls;
+    scenarioSnapshot: ScenarioSnapshot | null;
+} = {
     controls: { ...initialControls },
+    scenarioSnapshot: null,
     city: 'london',
     zoom: 9,
     selectedSegmentIndexes: []
 };
+
+let captureVersion = 0;
 
 const hooks = defineHooks({
     open(peer) {
@@ -40,7 +49,7 @@ const hooks = defineHooks({
             peerCount: peer.peers.size
         });
     },
-    message(peer, message) {
+    async message(peer, message) {
         // Ignore malformed payloads; only valid JSON objects enter the shared-state path.
         let payload: Partial<BusMessage>;
         try {
@@ -50,9 +59,45 @@ const hooks = defineHooks({
         } catch {
             return;
         }
+        if (payload.type === 'cycleflow/capture-scenario') {
+            const { stationId, view } = busSharedState.controls;
+            if (
+                view !== 'scenario' ||
+                !stationId ||
+                !ONLINE_MODEL.stations.some((station) => station.id === stationId)
+            )
+                return;
+            const version = ++captureVersion;
+            const feed = await readBikePointFeed();
+            if (version !== captureVersion) return;
+            const point = feed.inventory[stationId];
+            busSharedState.scenarioSnapshot = {
+                stationId,
+                origin: feed.origin,
+                fetchedAt: feed.fetchedAt,
+                updatedAt: point?.updatedAt ?? null,
+                status: inventoryStatus(point, feed, Date.parse(feed.origin)),
+                bikes: point?.bikes ?? null,
+                emptyDocks: point?.emptyDocks ?? null,
+                capacity: point?.capacity ?? null
+            };
+            const snapshot = {
+                type: 'cycleflow/scenario',
+                snapshot: busSharedState.scenarioSnapshot
+            };
+            peer.send(snapshot);
+            peer.publish('do', snapshot);
+            return;
+        }
         if (payload.type === 'cycleflow/update') {
             const patch = controlPatch(payload.controls);
             if (!Object.keys(patch).length) return;
+            if (
+                (patch.stationId !== undefined &&
+                    patch.stationId !== busSharedState.controls.stationId) ||
+                (patch.view !== undefined && patch.view !== busSharedState.controls.view)
+            )
+                captureVersion++;
             busSharedState.controls = { ...busSharedState.controls, ...patch };
             const snapshot = { type: 'cycleflow/state', controls: busSharedState.controls };
             peer.send(snapshot);

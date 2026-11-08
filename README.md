@@ -6,7 +6,7 @@ London CycleFlow studies recorded Santander Cycles hires using the Imperial Data
 |---|---|
 | Historical Backtesting | February 2026 TfL archive, five direct forecast windows, chronological holdout, six-screen dashboard |
 | Live Forecasting | TfL BikePoint inventory and calendar-only Ridge forecasts for 30 stations |
-| Physics-Constrained Scenario Simulation | Planned. Phase 2 shows hypothetical scaling of historical model predictions |
+| Physics-Constrained Scenario Simulation | Implemented for the 30 modeled stations using BikePoint inventory and historical trip ends |
 
 ## Reproduce Phase 2
 
@@ -135,10 +135,73 @@ playground with Node 24 and pnpm 10.33.0, run:
 ```sh
 pnpm exec vp lint apps/website/src
 pnpm --filter website build
-node --test tests/live.test.mjs tests/realtime.test.mjs tests/visualization.test.mjs
+node --test tests/live.test.mjs tests/realtime.test.mjs tests/scenario.test.mjs tests/visualization.test.mjs
 ```
 
 The frontend workflow builds the pinned Playground overlay and runs the
 tracked JavaScript tests. Unit tests inject BikePoint responses and a clock
 to exercise failure, recovery and cache expiry. The production WebSocket
 integration checks two operator clients and six screen clients.
+
+## Phase 4 Scenario Simulation
+
+Choose Scenario Simulation on either operator panel, select a station and capture
+its BikePoint inventory. Both operators and all six screens share the same frozen
+snapshot, horizon and shock settings. Capture again to refresh the starting point.
+The dashboard displays the source and fetch times and the freshness at capture.
+Cached or untimed snapshots are labeled. Missing inventory blocks the simulation.
+
+The six screens show inputs, inventory trajectories, hire outcomes, return
+outcomes, shortage and full-dock risk, and the five-minute ledger. Baseline and
+shocked runs share the same BikePoint observation and forecast origin. Demand and
+return shocks scale each interval by a percentage. Supply shock is a one-time
+addition or removal at the start, clipped to what the station can hold. Applied
+relocation is reported separately.
+
+- Effective capacity is observed bikes plus observed empty docks, held fixed
+  throughout the simulation. BikePoint nominal capacity is shown separately.
+- Hire inputs preserve the Phase 3 cumulative forecasts at 10, 20, 30, 45 and 60
+  minutes, distributing each increment evenly across its five-minute steps.
+  Historical completed hires are a proxy for requests. Latent demand is unobserved.
+- Return inputs use a five-minute station-specific Ridge baseline trained on
+  recorded TfL trip ends from February 2026 with calendar features only. The
+  chronological holdout starts on 23 February at 09:35. The artifact stores source
+  checksums, station coefficients and per-station holdout MAE/RMSE. This February
+  holdout measures accuracy within the archive month.
+- Each step accepts returns up to free docks, then accepts hires up to available
+  bikes. Ending inventory equals starting inventory plus accepted returns minus
+  accepted hires. Rejected requests are counted in their respective interval.
+- The simulation represents expected fractional bikes at a single station, with a
+  fixed within-bin order. Other stations, inter-station flows, intra-window
+  relocations and queued retries are outside this scenario. BikePoint counts
+  are observations at capture. Future outcomes and risks are hypothetical.
+
+### Relationship to Carbon PIML Platform
+
+Phase 4 adapts two methods from Carbon PIML Platform. Its
+[disturbance module](https://github.com/jz5616275-bit/carbon-piml-platform/blob/main/backend/ml/disturbance.py)
+scales selected predictions by a fractional change. CycleFlow applies the same
+multiplicative rule to forecast hire and return requests in
+`cycleflow/scenario.py` and `apps/website/src/lib/cycleflow-scenario.ts`. The
+controls use whole percentage units and allow −100% to model zero requests.
+The initial supply shock is a separate, bounded change in bike count.
+
+The original [correction module](https://github.com/jz5616275-bit/carbon-piml-platform/blob/main/backend/ml/piml_correction.py)
+applies non-negativity, an optional cap and an optional rate limit to a scalar
+forecast series. CycleFlow adapts the idea of applying physical bounds after
+forecasting. Its Python and dashboard simulations constrain accepted returns
+by free docks and accepted hires by available bikes, carrying inventory
+forward and recording unmet requests. Capacity bounds stock at each step,
+while a dock can serve multiple trips across the window. The original scalar
+cap and rate limit cannot enforce these stock and flow rules.
+
+This is method reuse. CycleFlow uses its own implementation and has no runtime
+dependency on either original module.
+
+
+Regenerate the return artifact with the same two CSVs and network backtest
+artifact used for Phase 2:
+
+~~~powershell
+python -m cycleflow.train_returns --historical apps/website/src/lib/historical-results.json --journeys <first-csv> <second-csv> --out apps/website/src/lib/return-model.json
+~~~

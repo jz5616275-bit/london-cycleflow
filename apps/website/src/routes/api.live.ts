@@ -1,14 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router';
 
-import { createBikePointFeed } from '../lib/bikepoint-feed';
-
-const readFeed = createBikePointFeed();
+import { readBikePointFeed } from '../lib/bikepoint-feed';
 
 export const Route = createFileRoute('/api/live')({
     server: {
         handlers: {
             GET: async () =>
-                Response.json(await readFeed(), {
+                Response.json(await readBikePointFeed(), {
                     headers: { 'Cache-Control': 'no-store' }
                 })
         }

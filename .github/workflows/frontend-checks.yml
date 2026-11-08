@@ -17,5 +17,5 @@ jobs:
         working-directory: playground
       - run: pnpm --filter website build
         working-directory: playground
-      - run: node --test tests/live.test.mjs tests/realtime.test.mjs tests/visualization.test.mjs
+      - run: node --test tests/live.test.mjs tests/realtime.test.mjs tests/scenario.test.mjs tests/visualization.test.mjs
         working-directory: playground

@@ -18,9 +18,11 @@ export const Route = createFileRoute('/control')({
 
 function ControlPage() {
     const { operator } = Route.useSearch();
-    const { controls, connection, update } = useCycleflow();
+    const { controls, connection, update, scenarioSnapshot, captureScenario } = useCycleflow();
     const live = controls.view === 'live';
-    const data = live ? null : buildHistorical(controls);
+    const scenario = controls.view === 'scenario';
+    const historical = !live && !scenario;
+    const data = historical ? buildHistorical(controls) : null;
     const root = useRef<HTMLElement>(null);
     useEffect(() => {
         const node = root.current;
@@ -54,11 +56,25 @@ function ControlPage() {
                 <div className="cf-control-block">
                     <label>DATA MODE</label>
                     <div className="cf-segmented">
-                        <button aria-pressed={!live} onClick={() => update({ view: 'historical' })}>
+                        <button
+                            aria-pressed={historical}
+                            onClick={() => update({ view: 'historical' })}
+                        >
                             Historical Backtesting
                         </button>
                         <button aria-pressed={live} onClick={() => update({ view: 'live' })}>
                             Live Forecast
+                        </button>
+                        <button
+                            aria-pressed={scenario}
+                            onClick={() =>
+                                update({
+                                    view: 'scenario',
+                                    stationId: controls.stationId ?? HISTORICAL_STATIONS[0].id
+                                })
+                            }
+                        >
+                            Scenario Simulation
                         </button>
                     </div>
                 </div>
@@ -88,7 +104,9 @@ function ControlPage() {
                         }
                         onChange={(e) => update({ stationId: e.target.value || null })}
                     >
-                        <option value="">All evaluated stations</option>
+                        <option value="">
+                            {scenario ? 'Select one station' : 'All evaluated stations'}
+                        </option>
                         {HISTORICAL_STATIONS.map((s) => (
                             <option key={s.id} value={s.id}>
                                 {s.name}
@@ -96,7 +114,7 @@ function ControlPage() {
                         ))}
                     </select>
                 </div>
-                {!live && (
+                {historical && (
                     <>
                         <div className="cf-control-block">
                             <label>FORECAST MODEL</label>
@@ -148,7 +166,7 @@ function ControlPage() {
                         </div>
                     </>
                 )}
-                {!live && (
+                {historical && (
                     <div className="cf-control-block">
                         <label>WALL PRESENTATION</label>
                         <div className="cf-segmented">
@@ -167,6 +185,45 @@ function ControlPage() {
                         </div>
                     </div>
                 )}
+                {scenario && (
+                    <>
+                        {(
+                            [
+                                ['demandPct', 'Demand shock (%)'],
+                                ['supplyBikes', 'Supply shock (bikes)'],
+                                ['returnPct', 'Return shock (%)']
+                            ] as const
+                        ).map(([key, label]) => (
+                            <div className="cf-control-block cf-shock-control" key={key}>
+                                <label htmlFor={key}>
+                                    {label} <strong>{controls[key] ?? 0}</strong>
+                                </label>
+                                <input
+                                    id={key}
+                                    type="range"
+                                    min="-100"
+                                    max="100"
+                                    step="1"
+                                    value={controls[key] ?? 0}
+                                    onChange={(event) =>
+                                        update({ [key]: Number(event.target.value) })
+                                    }
+                                />
+                            </div>
+                        ))}
+                        <div className="cf-control-block">
+                            <button disabled={!controls.stationId} onClick={captureScenario}>
+                                Capture BikePoint inventory
+                            </button>
+                            <small>
+                                {scenarioSnapshot &&
+                                scenarioSnapshot.stationId === controls.stationId
+                                    ? `${scenarioSnapshot.status} at capture · ${scenarioSnapshot.origin.slice(11, 19)} UTC`
+                                    : 'Select a station and capture inventory to run.'}
+                            </small>
+                        </div>
+                    </>
+                )}
                 <div className="cf-control-block cf-reset-block">
                     {data && (
                         <div>
@@ -181,7 +238,8 @@ function ControlPage() {
                                 minutes: 30,
                                 shock: 0,
                                 mode: 'constrained',
-                                stationId: null,
+                                stationId: scenario ? controls.stationId : null,
+                                ...(scenario ? { demandPct: 0, supplyBikes: 0, returnPct: 0 } : {}),
                                 wallLayout: 'analytics'
                             })
                         }
@@ -191,11 +249,15 @@ function ControlPage() {
                 </div>
             </fieldset>
             <footer>
-                <span className="cf-demo-badge">{live ? 'Live Forecast' : HISTORICAL_LABEL}</span>
+                <span className="cf-demo-badge">
+                    {scenario ? 'Scenario Simulation' : live ? 'Live Forecast' : HISTORICAL_LABEL}
+                </span>
                 <span>
-                    {live
-                        ? 'TfL inventory and calendar forecasts'
-                        : 'Both operators control the same wall · hypothetical scenarios'}
+                    {scenario
+                        ? 'Frozen inventory · hypothetical flows'
+                        : live
+                          ? 'TfL inventory and calendar forecasts'
+                          : 'Both operators control the same wall · hypothetical scenarios'}
                 </span>
             </footer>
         </main>

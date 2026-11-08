@@ -4,7 +4,10 @@ export type Controls = {
     shock: number;
     mode: 'baseline' | 'constrained';
     stationId: string | null;
-    view?: 'historical' | 'live';
+    view?: 'historical' | 'live' | 'scenario';
+    demandPct?: number;
+    supplyBikes?: number;
+    returnPct?: number;
     wallLayout?: 'analytics' | 'panorama';
 };
 export const initialControls: Controls = {
@@ -19,7 +22,12 @@ export function controlPatch(value: unknown): Partial<Controls> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
     const v = value as Record<string, unknown>;
     const patch: Partial<Controls> = {};
-    if (v.view === 'historical' || v.view === 'live') patch.view = v.view;
+    if (v.view === 'historical' || v.view === 'live' || v.view === 'scenario') patch.view = v.view;
+    for (const key of ['demandPct', 'returnPct', 'supplyBikes'] as const) {
+        const value = v[key];
+        if (typeof value === 'number' && Number.isInteger(value) && value >= -100 && value <= 100)
+            patch[key] = value;
+    }
     if (v.wallLayout === 'analytics' || v.wallLayout === 'panorama')
         patch.wallLayout = v.wallLayout;
     if (typeof v.minutes === 'number' && WINDOWS.some((n) => n === v.minutes))

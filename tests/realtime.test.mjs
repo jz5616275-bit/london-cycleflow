@@ -28,12 +28,26 @@ test(
     { timeout: 30000 },
     async () => {
         const port = 15879;
-        const server = spawn(process.execPath, ['.output/server/index.mjs'], {
-            cwd: new URL('../apps/website/', import.meta.url),
-            env: { ...process.env, PORT: String(port), HOST: '127.0.0.1' },
-            stdio: ['ignore', 'pipe', 'pipe'],
-            windowsHide: true
-        });
+        const fixture = `globalThis.fetch = async () => Response.json([{
+            id: 'BikePoints_test', commonName: 'Test station',
+            additionalProperties: Object.entries({TerminalName: '1072', NbBikes: '4',
+                NbEmptyDocks: '6', NbDocks: '11'}).map(([key, value]) =>
+                    ({key, value, modified: new Date().toISOString()}))
+        }]);`;
+        const server = spawn(
+            process.execPath,
+            [
+                '--import',
+                'data:text/javascript,' + encodeURIComponent(fixture),
+                '.output/server/index.mjs'
+            ],
+            {
+                cwd: new URL('../apps/website/', import.meta.url),
+                env: { ...process.env, PORT: String(port), HOST: '127.0.0.1' },
+                stdio: ['ignore', 'pipe', 'pipe'],
+                windowsHide: true
+            }
+        );
         const peers = [];
         const connect = async () => {
             const ws = new WebSocket(`ws://127.0.0.1:${port}/bus`);
@@ -101,7 +115,34 @@ test(
                 rejoined.packets.find((p) => p.type === 'hello').state.controls,
                 latest(clients[0])
             );
+            send(clients[0], { view: 'scenario', stationId: '1072', demandPct: 40 });
+            send(clients[1], { supplyBikes: -3, returnPct: 75 });
+            await until(() =>
+                clients
+                    .slice(0, 7)
+                    .concat(rejoined)
+                    .every((c) => {
+                        const state = latest(c);
+                        return (
+                            state?.view === 'scenario' &&
+                            state.demandPct === 40 &&
+                            state.supplyBikes === -3 &&
+                            state.returnPct === 75
+                        );
+                    })
+            );
+            clients[1].ws.send(JSON.stringify({ type: 'cycleflow/capture-scenario' }));
+            const captured = (c) =>
+                c.packets.findLast((p) => p.type === 'cycleflow/scenario')?.snapshot;
+            const active = clients.slice(0, 7).concat(rejoined);
+            await until(() => active.every((c) => captured(c)));
+            assert.equal(captured(clients[0]).bikes, 4);
+            for (const client of active) assert.deepEqual(captured(client), captured(clients[0]));
             const late = await connect();
+            assert.deepEqual(
+                late.packets.find((p) => p.type === 'hello').state.scenarioSnapshot,
+                captured(clients[0])
+            );
             assert.deepEqual(
                 late.packets.find((p) => p.type === 'hello').state.controls,
                 latest(clients[0])
