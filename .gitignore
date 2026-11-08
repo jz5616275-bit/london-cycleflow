@@ -8,3 +8,12 @@ __pycache__/
 .DS_Store
 input_data/
 node_modules/
+/playground/
+.env.*
+.envrc
+venv/
+*.csv
+*.pem
+*.key
+*.pfx
+*.p12

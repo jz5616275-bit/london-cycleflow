@@ -5,7 +5,7 @@ London CycleFlow studies recorded Santander Cycles hires using the Imperial Data
 | Module | Status |
 |---|---|
 | Historical Backtesting | February 2026 TfL archive, five direct forecast windows, chronological holdout, six-screen dashboard |
-| Live Forecasting | Planned |
+| Live Forecasting | TfL BikePoint inventory and calendar-only Ridge forecasts for 30 stations |
 | Physics-Constrained Scenario Simulation | Planned. Phase 2 shows hypothetical scaling of historical model predictions |
 
 ## Reproduce Phase 2
@@ -24,7 +24,7 @@ python -m pytest -q
 python -m flake8 cycleflow tests --max-line-length=100
 ```
 
-The source overlay contains the generated results. For an existing playground, copy the refreshed JSON to `playground/apps/website/src/lib/historical-results.json`. To create a fresh playground, run `bash tools/bootstrap_playground.sh` from Git Bash or WSL, then install dependencies with `pnpm install` and start the playground with `pnpm exec vp run dev`. The bootstrap pins the Imperial starter revision used for this implementation. It exits if the destination already contains a Git repository.
+The source overlay contains the generated results. For an existing playground, copy the refreshed JSON to `playground/apps/website/src/lib/historical-results.json`. To create a fresh playground, run `bash tools/bootstrap_playground.sh` from Git Bash or WSL, then enter the `playground` directory, run `pnpm install --frozen-lockfile` and start it with `pnpm exec vp run dev`. The bootstrap pins the Imperial starter revision used for this implementation. It exits if the destination already contains a Git repository.
 
 ## Evaluation
 
@@ -47,3 +47,98 @@ Station-level clipping slightly increases aggregate MAE at all horizons. It redu
 The run covers one month and uses a single holdout. The historical adapter requires a coverage period without a London daylight-saving transition. A future evaluation can expand coverage across seasons and use explicitly resolved DST timestamps.
 
 Sources: [TfL open data](https://tfl.gov.uk/info-for/open-data-users/our-open-data), [Imperial DO starter](https://github.com/dsi-icl/do-starter-playground).
+
+## Phase 3 Live Forecast
+
+Choose **Live Forecast** on either operator panel. The choice, station and forecast
+horizon are shared with the six screens over the existing WebSocket bus.
+Choose **Historical Backtesting** to return to the original view.
+
+- **Observed now:** BikePoint reports bikes, empty docks and total capacity. The server
+  joins to the 30 modelled stations by normalized TerminalName, rejecting ambiguous
+  matches. The UI separately shows the retrieval time and the oldest TfL modification
+  timestamp among the three inventory fields. The local server shares one upstream
+  request per minute across wall clients, times out after eight seconds and retains
+  the last successful snapshot when a refresh fails. Readings older than five minutes
+  or retained after failure are stale. Missing or inconsistent counts are unavailable.
+  If no matched row has usable counts, the previous snapshot is kept. Bikes plus
+  empty docks can be less than capacity because some docks are unavailable.
+- **Predicted now:** The Phase 2 model required an observed prior hire count and its
+  export contained backtest outputs rather than deployable weights. BikePoint
+  provides inventory, so Phase 3 retrains the same direct Ridge approach on the
+  same station set and pre-cutoff trip archive, with only London time-of-day and
+  weekday features. Five independent models predict successful hires after each
+  server forecast origin. The dashboard refreshes the origin once a minute.
+- **Assumptions:** Calendar effects estimated in February 2026 may drift over time.
+  The deployment uses continuous time-of-day features, evaluated on minute-aligned
+  historical origins. Counts are nonnegative cumulative estimates, with no inventory
+  adjustment. At each station and origin, the forecast for a longer window is
+  at least the forecast for every shorter window. Evaluation applies this same correction.
+  The historical screen retains its existing hypothetical scaling. The live screen
+  has no demand, supply, or returns perturbation.
+
+Run from the project root to reproduce the artifact, then copy it to the same
+relative location inside an existing playground.
+
+```powershell
+python -m cycleflow.train_online --historical apps/website/src/lib/historical-results.json --journeys input_data/437JourneyDataExtract01Feb2026-14Feb2026.csv input_data/438JourneyDataExtract15Feb2026-28Feb2026.csv --out apps/website/src/lib/online-model.json
+```
+
+Training verifies the source checksums and uses the original holdout boundary
+(23 February 2026 09:35 London time). A training window must end at or before
+that boundary. The online artifact stores the per-station weights, minute-grid
+holdout scores and the subset evaluated on the original 5-minute grid. Below
+are corrected errors for summed hires across the 30 stations, on the common
+5-minute origins so the historical lag model and deployable model are comparable.
+
+| Horizon | Phase 2 lag MAE / RMSE | Phase 3 calendar MAE / RMSE |
+|---:|---:|---:|
+| 10 min | 7.499 / 11.742 | 9.751 / 15.493 |
+| 20 min | 14.424 / 22.968 | 18.808 / 30.139 |
+| 30 min | 21.429 / 34.443 | 27.769 / 44.556 |
+| 45 min | 32.364 / 52.467 | 41.075 / 65.623 |
+| 60 min | 43.862 / 71.040 | 54.148 / 85.836 |
+
+The calendar-only model has larger errors at all five horizons. The live wall
+labels its minute-grid MAE and RMSE as historical validation, since live
+observed hire counts are unavailable from BikePoint.
+
+
+### Seasonality and validation scope
+
+The common-grid comparison uses the same 30 stations, actual hire targets, cutoff,
+forecast origins and aggregate error calculation. The two fitted models use
+different training grids. An additional fit on the original five-minute training
+grid, with only the lag removed, gave a 60-minute MAE of 54.165 and RMSE of 85.873
+before the cumulative correction. This is close to the deployable model's errors
+and indicates that access to recent observed hires drives most of the gap.
+
+A fixed-weight check used the same stations and all eligible minute origins in
+two other 15-day archives. Both samples showed aggregate underprediction.
+
+| TfL sample | 60 min mean actual | 60 min mean forecast | MAE | RMSE |
+|---|---:|---:|---:|---:|
+| 1–15 Nov 2025 | 109.83 | 86.78 | 53.10 | 90.20 |
+| 17–31 May 2026 | 120.32 | 87.02 | 58.90 | 91.54 |
+
+November 2025 is a retrospective seasonal comparison that predates training.
+May 2026 is a forward check. These checks flag a transfer risk for the February
+fit. November 2026 accuracy and the contribution of seasonality versus other
+changes in demand remain unmeasured. [November archive](https://cycling.data.tfl.gov.uk/usage-stats/431JourneyDataExtract01Nov2025-15Nov2025.csv) · [May archive](https://cycling.data.tfl.gov.uk/usage-stats/444JourneyDataExtract17May2026-31May2026.csv)
+
+### Checks
+
+From the repository root, run `python -m pytest -q` and
+`python -m flake8 cycleflow tests --max-line-length=100`. From a bootstrapped
+playground with Node 24 and pnpm 10.33.0, run:
+
+```sh
+pnpm exec vp lint apps/website/src
+pnpm --filter website build
+node --test tests/live.test.mjs tests/realtime.test.mjs tests/visualization.test.mjs
+```
+
+The frontend workflow builds the pinned Playground overlay and runs the
+tracked JavaScript tests. Unit tests inject BikePoint responses and a clock
+to exercise failure, recovery and cache expiry. The production WebSocket
+integration checks two operator clients and six screen clients.

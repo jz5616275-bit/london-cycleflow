@@ -149,7 +149,7 @@ function HomePage() {
                         IMPERIAL DATA OBSERVATORY · 2 × 3 WALL · 1920×1080 / NODE
                     </h2>
                     <span className="rounded-full bg-[var(--primary)] px-2 py-1 text-[10px] font-medium text-[var(--primary-foreground)]">
-                        TFL HISTORICAL BACKTEST · FEB 2026
+                        TFL HISTORICAL BACKTEST / LIVE FORECAST
                     </span>
                 </div>
 

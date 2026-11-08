@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useMemo } from 'react';
 
 import { LineChart, MetricBars, SERIES } from '../components/cycleflow-charts';
+import { LiveWall } from '../components/cycleflow-live-wall';
 import { LondonMap } from '../components/cycleflow-map';
 import { wallTile } from '../lib/cycleflow-demo';
 import { buildHistorical, HISTORICAL_LABEL } from '../lib/cycleflow-historical';
@@ -33,6 +34,31 @@ const number = (value: number) => value.toLocaleString('en-GB', { maximumFractio
 function ScreenPage() {
     const { c, r } = Route.useSearch();
     const { controls, connection, update } = useCycleflow();
+    if (controls.view === 'live') {
+        return (
+            <LiveWall
+                controls={controls}
+                c={c}
+                r={r}
+                select={(stationId) => update({ stationId })}
+            />
+        );
+    }
+    return (
+        <HistoricalWall controls={controls} c={c} r={r} connection={connection} update={update} />
+    );
+}
+
+function HistoricalWall({
+    controls,
+    c,
+    r,
+    connection,
+    update
+}: ReturnType<typeof useCycleflow> & {
+    c: number;
+    r: number;
+}) {
     const data = useMemo(() => buildHistorical(controls), [controls]);
     const panel = r * 3 + c;
     const panorama = controls.wallLayout === 'panorama';

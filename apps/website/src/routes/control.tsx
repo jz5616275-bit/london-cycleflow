@@ -19,7 +19,8 @@ export const Route = createFileRoute('/control')({
 function ControlPage() {
     const { operator } = Route.useSearch();
     const { controls, connection, update } = useCycleflow();
-    const data = buildHistorical(controls);
+    const live = controls.view === 'live';
+    const data = live ? null : buildHistorical(controls);
     const root = useRef<HTMLElement>(null);
     useEffect(() => {
         const node = root.current;
@@ -50,6 +51,17 @@ function ControlPage() {
             </header>
             <fieldset disabled={connection !== 'synced'} className="cf-control-fields">
                 <legend className="cf-sr-only">Shared forecast and scenario controls</legend>
+                <div className="cf-control-block">
+                    <label>DATA MODE</label>
+                    <div className="cf-segmented">
+                        <button aria-pressed={!live} onClick={() => update({ view: 'historical' })}>
+                            Historical Backtesting
+                        </button>
+                        <button aria-pressed={live} onClick={() => update({ view: 'live' })}>
+                            Live Forecast
+                        </button>
+                    </div>
+                </div>
                 <div className="cf-control-block">
                     <label>FORECAST WINDOW</label>
                     <div className="cf-window-buttons">
@@ -84,76 +96,84 @@ function ControlPage() {
                         ))}
                     </select>
                 </div>
-                <div className="cf-control-block">
-                    <label>FORECAST MODEL</label>
-                    <div className="cf-segmented">
-                        <button
-                            aria-pressed={controls.mode === 'baseline'}
-                            onClick={() => update({ mode: 'baseline' })}
-                        >
-                            Baseline
-                        </button>
-                        <button
-                            aria-pressed={controls.mode === 'constrained'}
-                            onClick={() => update({ mode: 'constrained' })}
-                        >
-                            Nonnegative correction
-                        </button>
-                    </div>
-                </div>
-                <div className="cf-control-block cf-shock-control">
-                    <label htmlFor="demand-shock">
-                        DEMAND SHOCK{' '}
-                        <strong>
-                            {controls.shock > 0 ? '+' : ''}
-                            {controls.shock}%
-                        </strong>
-                    </label>
-                    <input
-                        id="demand-shock"
-                        aria-label="Demand shock"
-                        type="range"
-                        min="-50"
-                        max="100"
-                        step="10"
-                        value={controls.shock}
-                        onChange={(e) => update({ shock: Number(e.target.value) })}
-                    />
-                    <div className="cf-shock-presets">
-                        {[-50, 0, 30, 100].map((shock) => (
+                {!live && (
+                    <>
+                        <div className="cf-control-block">
+                            <label>FORECAST MODEL</label>
+                            <div className="cf-segmented">
+                                <button
+                                    aria-pressed={controls.mode === 'baseline'}
+                                    onClick={() => update({ mode: 'baseline' })}
+                                >
+                                    Baseline
+                                </button>
+                                <button
+                                    aria-pressed={controls.mode === 'constrained'}
+                                    onClick={() => update({ mode: 'constrained' })}
+                                >
+                                    Nonnegative correction
+                                </button>
+                            </div>
+                        </div>
+                        <div className="cf-control-block cf-shock-control">
+                            <label htmlFor="demand-shock">
+                                DEMAND SHOCK{' '}
+                                <strong>
+                                    {controls.shock > 0 ? '+' : ''}
+                                    {controls.shock}%
+                                </strong>
+                            </label>
+                            <input
+                                id="demand-shock"
+                                aria-label="Demand shock"
+                                type="range"
+                                min="-50"
+                                max="100"
+                                step="10"
+                                value={controls.shock}
+                                onChange={(e) => update({ shock: Number(e.target.value) })}
+                            />
+                            <div className="cf-shock-presets">
+                                {[-50, 0, 30, 100].map((shock) => (
+                                    <button
+                                        key={shock}
+                                        aria-pressed={controls.shock === shock}
+                                        onClick={() => update({ shock })}
+                                    >
+                                        {shock > 0 ? '+' : ''}
+                                        {shock}%
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </>
+                )}
+                {!live && (
+                    <div className="cf-control-block">
+                        <label>WALL PRESENTATION</label>
+                        <div className="cf-segmented">
                             <button
-                                key={shock}
-                                aria-pressed={controls.shock === shock}
-                                onClick={() => update({ shock })}
+                                aria-pressed={controls.wallLayout !== 'panorama'}
+                                onClick={() => update({ wallLayout: 'analytics' })}
                             >
-                                {shock > 0 ? '+' : ''}
-                                {shock}%
+                                Six insights
                             </button>
-                        ))}
+                            <button
+                                aria-pressed={controls.wallLayout === 'panorama'}
+                                onClick={() => update({ wallLayout: 'panorama' })}
+                            >
+                                Stitched map
+                            </button>
+                        </div>
                     </div>
-                </div>
-                <div className="cf-control-block">
-                    <label>WALL PRESENTATION</label>
-                    <div className="cf-segmented">
-                        <button
-                            aria-pressed={controls.wallLayout !== 'panorama'}
-                            onClick={() => update({ wallLayout: 'analytics' })}
-                        >
-                            Six insights
-                        </button>
-                        <button
-                            aria-pressed={controls.wallLayout === 'panorama'}
-                            onClick={() => update({ wallLayout: 'panorama' })}
-                        >
-                            Stitched map
-                        </button>
-                    </div>
-                </div>
+                )}
                 <div className="cf-control-block cf-reset-block">
-                    <div>
-                        <span>Scenario hires</span>
-                        <strong>{data.total.toFixed(1)}</strong>
-                    </div>
+                    {data && (
+                        <div>
+                            <span>Scenario hires</span>
+                            <strong>{data.total.toFixed(1)}</strong>
+                        </div>
+                    )}
                     <button
                         className="cf-reset"
                         onClick={() =>
@@ -171,8 +191,12 @@ function ControlPage() {
                 </div>
             </fieldset>
             <footer>
-                <span className="cf-demo-badge">{HISTORICAL_LABEL}</span>
-                <span>Both operators control the same wall · hypothetical scenarios</span>
+                <span className="cf-demo-badge">{live ? 'Live Forecast' : HISTORICAL_LABEL}</span>
+                <span>
+                    {live
+                        ? 'TfL inventory and calendar forecasts'
+                        : 'Both operators control the same wall · hypothetical scenarios'}
+                </span>
             </footer>
         </main>
     );

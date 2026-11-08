@@ -66,7 +66,7 @@ def station_keys(values: pd.Series) -> pd.Series:
 def station_counts(journeys: pd.DataFrame, station_id: str,
                    interval: str = "5min", *, start=None, end=None) -> pd.DataFrame:
     """Time-bucket observed hires and returns for one station."""
-    if interval not in ("5min", "10min", "15min", "30min", "1h"):
+    if interval not in ("1min", "5min", "10min", "15min", "30min", "1h"):
         raise ValueError("Unsupported interval")
     starts = journeys.loc[journeys.start_id == str(station_id), "started_at"]
     ends = journeys.loc[journeys.end_id == str(station_id), "ended_at"].dropna()
