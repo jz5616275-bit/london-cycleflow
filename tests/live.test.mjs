@@ -111,14 +111,25 @@ test('calendar features use London civil time and every horizon works without in
 });
 
 test('same-origin cumulative forecast cannot decrease when extending the window', () => {
-    const originWithDecreasingRawEstimates = '2026-11-09T16:20:00Z';
+    const forecastOrigin = '2026-11-09T16:20:00Z';
     const cumulative = [10, 20, 30, 45, 60].map(
         (minutes) =>
-            forecastStations(originWithDecreasingRawEstimates, minutes).find(
-                ({ id }) => id === '1072'
-            ).demand
+            forecastStations(forecastOrigin, minutes).find(({ id }) => id === '1072').demand
     );
     assert.ok(cumulative[3] > 0);
-    assert.equal(cumulative[4], cumulative[3]);
+    assert.ok(cumulative.every(Number.isFinite));
     assert.ok(cumulative.every((value, index) => index === 0 || value >= cumulative[index - 1]));
+});
+
+test('live seasonal predictions match Python for London summer time and a winter weekend', () => {
+    const cases = [
+        ['2026-04-06T08:35:00Z', [6.45547339, 12.24143082, 17.32716741, 23.61400258, 28.30290515]],
+        ['2026-02-08T14:05:00Z', [0.19878889, 0.38154599, 0.55192168, 0.79630298, 1.04194144]]
+    ];
+    for (const [date, expected] of cases) {
+        [10, 20, 30, 45, 60].forEach((window, i) => {
+            const station = forecastStations(date, window).find(({ id }) => id === '1072');
+            assert.ok(Math.abs(station.demand - expected[i]) < 1e-7);
+        });
+    }
 });

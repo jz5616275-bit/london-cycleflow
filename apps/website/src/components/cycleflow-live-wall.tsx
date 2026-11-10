@@ -279,8 +279,8 @@ export function LiveWall({
                             </tbody>
                         </table>
                         <p className="cf-footnote">
-                            February 2026 chronological holdout · nonnegative, cumulative calendar
-                            forecasts · errors are historical · no live actual hire labels
+                            Feb, Apr and May 2026 chronological holdouts · nonnegative, cumulative
+                            calendar forecasts · errors are historical · no live actual hire labels
                         </p>
                     </>
                 )}

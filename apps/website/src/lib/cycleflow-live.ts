@@ -1,5 +1,5 @@
-import model from './online-model.json' with { type: 'json' };
 import { WINDOWS } from './realtime/cycleflow-state.ts';
+import model from './seasonal-model.json' with { type: 'json' };
 
 export const ONLINE_MODEL = model;
 export const BIKEPOINT_URL = 'https://api.tfl.gov.uk/BikePoint';
@@ -77,12 +77,13 @@ export function readInventory(
 const londonClock = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/London',
     weekday: 'short',
+    month: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
     hourCycle: 'h23'
 });
 
-export function forecastFeatures(origin: Date) {
+export function forecastFeatures(origin: Date, variant = 'phase3_features') {
     const parts = londonClock.formatToParts(origin);
     const read = (name: Intl.DateTimeFormatPartTypes) =>
         parts.find((part) => part.type === name)?.value;
@@ -95,11 +96,35 @@ export function forecastFeatures(origin: Date) {
     );
     const day = (2 * Math.PI * minute) / 1440;
     const week = (2 * Math.PI * weekday) / 7;
-    return [1, Math.sin(day), Math.cos(day), Math.sin(week), Math.cos(week)];
+    const base = [1, Math.sin(day), Math.cos(day), Math.sin(week), Math.cos(week)];
+    if (variant === 'phase3_features') return base;
+    const harmonics = [1, 2, 3, 4];
+    const sine = harmonics.map((k) => Math.sin(k * day));
+    const cosine = harmonics.map((k) => Math.cos(k * day));
+    const daily = [...sine, ...cosine];
+    const weekend = Number(weekday >= 5);
+    const commute = [
+        ...base,
+        ...sine.slice(1),
+        ...cosine.slice(1),
+        weekend,
+        ...daily.map((value) => value * weekend)
+    ];
+    if (variant === 'commute') return commute;
+    const year = (2 * Math.PI * (Number(read('month')) - 1)) / 12;
+    const sinYear = Math.sin(year);
+    const cosYear = Math.cos(year);
+    return [
+        ...commute,
+        sinYear,
+        cosYear,
+        ...daily.map((value) => value * sinYear),
+        ...daily.map((value) => value * cosYear)
+    ];
 }
 
 export function forecastStations(origin: string, minutes: number) {
-    const features = forecastFeatures(new Date(origin));
+    const features = forecastFeatures(new Date(origin), ONLINE_MODEL.variant);
     return ONLINE_MODEL.stations.map((station) => {
         // A cumulative hire estimate cannot decrease when the window gets longer.
         let demand = 0;

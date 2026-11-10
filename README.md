@@ -205,3 +205,77 @@ artifact used for Phase 2:
 ~~~powershell
 python -m cycleflow.train_returns --historical apps/website/src/lib/historical-results.json --journeys <first-csv> <second-csv> --out apps/website/src/lib/return-model.json
 ~~~
+
+## Phase 5A seasonal hire model
+
+The live hire forecast now uses seasonal Ridge. The original February-only
+Phase 3 weights remain in `apps/website/src/lib/online-model.json` for comparison.
+The Phase 4 simulation uses the same live hire forecast and continues to use its
+existing February-trained return model.
+
+Train on the first halves of April, July and November 2025 and January 2026.
+Compare three Ridge feature sets at fixed alpha 15 on February 1–14, 2026:
+Phase 3 calendar features, daily harmonics with weekend interactions, and that
+same set plus annual month harmonics and their daily interactions. Select by
+mean station MAE divided by horizon length, averaged across the five horizons.
+Validation scores were 0.05123, 0.04219 and 0.03817, respectively. Refit the
+selected seasonal feature set on training plus validation.
+
+Score frozen weights on February 24–28, April 1–15 and May 17–31, 2026. February
+overlaps the previously reported Phase 3 holdout. Phase 2 selected the 30 stations
+by ranking hires before 23 February 2026 at 09:35 London time among stations
+matched to BikePoint. Both frozen models use those same IDs. April and May are out of time
+for both models. Use the same 50,223 minute origins and 30 stations at every
+horizon. The target sums recorded trip starts in [origin, origin + horizon).
+Each interval stays inside its own archive block. Match normalized TfL terminal
+IDs, check that all 30 stations have trips in each period and keep blocks away
+from London clock changes. Station coverage is checked at block level.
+
+| Window (min) | Phase 3 MAE / RMSE | Seasonal MAE / RMSE |
+| ---: | ---: | ---: |
+| 10 | 9.76 / 15.52 | 6.85 / 10.31 |
+| 20 | 18.78 / 30.15 | 12.72 / 19.29 |
+| 30 | 27.72 / 44.57 | 18.43 / 28.00 |
+| 45 | 40.96 / 65.69 | 26.61 / 40.45 |
+| 60 | 53.99 / 86.02 | 34.24 / 51.99 |
+
+Errors above use the sum across the 30 stations, in hires per window. Both
+models use the same nonnegative cumulative maximum across horizons. The
+deployment gate requires improvement in both pooled metrics for every horizon,
+with no test period exceeding 5% deterioration in either station-level metric.
+The candidate passed. At 60 minutes, mean prediction minus observation changed
+from −20.58 to −20.81 in late February, −9.09 to +8.90 in April and −33.30 to
+−2.94 in May. Lower absolute errors do not eliminate systematic bias.
+
+Input features are computed from the London clock. There are no live trip-count
+lags, weather or inventory features. The holdouts cover winter and spring.
+Summer and autumn occur in training only. Results apply to the original 30
+stations and sampled periods. Minute origins overlap, and the point estimates
+do not quantify uncertainty. Recorded hires measure completed transactions.
+
+### Independent summer and autumn validation
+
+Status is **PARTIAL** as of 10 November 2026. The latest journey extract in
+the [official TfL usage archive](https://cycling.data.tfl.gov.uk/#usage-stats/)
+was file 444, covering 17–31 May 2026. The London Datastore publishes
+scheme-wide daily totals, which lack station IDs and minute-level journey
+starts needed to score the five forecast windows.
+
+Phase 3 training ends at the 23 February 2026 cutoff above. Seasonal Ridge
+used four training blocks from April 2025 through January 2026, selected its
+features on 1–14 February 2026 and refit on those combined blocks. Its existing
+evaluation and deployment decision used late February, April and May 2026.
+A new forward holdout must start after 31 May 2026. Summer and autumn 2025
+precede both model cutoffs, and parts of those seasons entered seasonal training.
+Summer and autumn monthly MAE, RMSE, mean signed bias and station-level errors
+therefore remain unavailable under the existing forward-test protocol.
+
+
+Download the eight CSVs listed with URLs and SHA-256 checksums in
+[seasonal-validation.json](seasonal-validation.json) from the
+[TfL journey archive](https://cycling.data.tfl.gov.uk/), and place them in
+the ignored `input_data` directory. Reproduce the comparison and gated export:
+
+~~~powershell
+python -m cycleflow.seasonal --baseline apps/website/src/lib/online-model.json --out seasonal-validation.json --deploy apps/website/src/lib/seasonal-model.json
+~~~
